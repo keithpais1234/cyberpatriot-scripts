@@ -1,234 +1,187 @@
 #!/bin/bash
 
-# Check if the script is run as root
-if [ "$EUID" -ne 0 ]; then
-  echo "Please run the script as root."
-  exit
-fi
+# Start the timer for logging execution time
+startTime=$(date +"%s")
 
-# Ensure the script is run from the correct directory
-if [[ "$PWD" != *"CyberPatriot"* ]]; then
-  echo "Please run the script from the CyberPatriot directory."
-  exit
-fi
-
-echo "Are the forensics questions solved? (y/n)"
-read forensics_response
-echo "---------"
-
-echo "Are Firefox settings correctly set? (y/n)"
-read firefox_response
-echo "---------"
-
-echo "Please fill out information in the allowed directory. (Press Enter to continue)"
-read
-echo "---------"
-
-echo "Check /etc/sudoers (Press Enter to continue)"
-read
-echo "---------"
-
-# Function to back up files
-backup_file() {
-  local filepath="$1"
-  local backup_dir="backup"
-  mkdir -p $backup_dir
-  cp -n "$filepath" "$backup_dir/"
-  echo "Backup of $filepath created in $backup_dir/"
+# Function to log the execution time and message
+printTime() {
+    endTime=$(date +"%s")
+    diffTime=$(($endTime-$startTime))
+    minutes=$(printf "%02d" $(($diffTime / 60)))
+    seconds=$(printf "%02d" $(($diffTime % 60)))
+    echo -e "$minutes:$seconds -- $1" >> ~/Desktop/Script.log
 }
 
-# Function to print differences between current and allowed configurations
-print_difference() {
-  local current="$1"
-  local allowed="$2"
-  echo "Current vs allowed difference:"
-  comm -3 <(echo "$current" | sort) <(echo "$allowed" | sort)
-}
+# Create and set permissions for the log file
+touch ~/Desktop/Script.log
+echo > ~/Desktop/Script.log
+chmod 777 ~/Desktop/Script.log
 
-# Get lists from allowed and defaults files
-allowed_users=$(<allowed/allowed_users.txt)
-allowed_admins=$(<allowed/allowed_admins.txt)
-allowed_packages=$(grep -v '^#' allowed/allowed_packages.txt)
-default_users=$(<defaults/default_users.txt)
-default_groups=$(<defaults/default_groups.txt)
-default_packages=$(<defaults/default_packages.txt)
-
-total_users=$(echo "$default_users"$'\n'"$allowed_users" | sort | uniq)
-total_groups=$(echo "$default_groups"$'\n'"$allowed_users" | sort | uniq)
-
-# Check existing users and groups
-current_users=$(getent passwd | cut -d: -f1)
-print_difference "$current_users" "$total_users"
-echo "---------"
-
-current_groups=$(getent group | cut -d: -f1)
-print_difference "$current_groups" "$total_groups"
-echo "---------"
-
-current_sudoers=$(getent group sudo | cut -d: -f4 | tr ',' '\n')
-print_difference "$current_sudoers" "$allowed_admins"
-echo "---------"
-
-# Add a new admin user
-echo "Adding user 'parktudor'..."
-useradd -m -s /bin/bash parktudor
-echo "parktudor:GreatYear2019!@" | chpasswd
-usermod -aG sudo parktudor
-echo "User 'parktudor' added and password set."
-echo "---------"
-
-# Find UID/GID=0 users
-echo "Find UID/GID=0 users? (y/n)"
-read uid_check
-if [ "$uid_check" == "y" ]; then
-  uid0_users=$(awk -F: '($3 == 0 && $1 != "root") {print $1}' /etc/passwd)
-  if [ -n "$uid0_users" ]; then
-    echo "WARNING: UID/GID=0 USERS FOUND:"
-    echo "$uid0_users"
-    read -p "Press Enter to continue"
-  else
-    echo "No UID/GID=0 users found."
-  fi
+# Ensure script is run as root
+if [[ $EUID -ne 0 ]]; then
+  echo "This script must be run as root."
+  exit 1
 fi
-echo "---------"
+printTime "Script is being run as root."
 
-# Reset /etc/rc.local
-echo "Reset /etc/rc.local? (y/n)"
-read rc_local_response
-if [ "$rc_local_response" == "y" ]; then
-  backup_file /etc/rc.local
-  cp defaults/default_rc.local /etc/rc.local
-  echo "/etc/rc.local reset to default."
+# Check and print current OS version
+clear
+printTime "The current OS is Linux Mint."
+
+# Create backup directory and set permissions
+mkdir -p ~/Desktop/backups
+chmod 777 ~/Desktop/backups
+printTime "Backups folder created on the Desktop."
+
+# Backup critical files and set permissions
+cp /etc/group ~/Desktop/backups/
+chmod 777 ~/Desktop/backups/group
+cp /etc/passwd ~/Desktop/backups/
+chmod 777 ~/Desktop/backups/passwd
+printTime "/etc/group and /etc/passwd files backed up."
+
+# Prompt for user management actions
+echo "Type all user account names, with a space in between:"
+read -a users
+usersLength=${#users[@]}
+
+for (( i=0; i<$usersLength; i++ )); do
+    clear
+    echo "${users[${i}]}"
+    echo "Delete ${users[${i}]}? yes or no"
+    read yn1
+    if [ "$yn1" == "yes" ]; then
+        userdel -r "${users[${i}]}"
+        printTime "${users[${i}]} has been deleted."
+    else
+        echo "Make ${users[${i}]} an administrator? yes or no"
+        read yn2
+        if [ "$yn2" == "yes" ]; then
+            gpasswd -a "${users[${i}]}" sudo
+            gpasswd -a "${users[${i}]}" adm
+            gpasswd -a "${users[${i}]}" lpadmin
+            gpasswd -a "${users[${i}]}" sambashare
+            printTime "${users[${i}]} has been made an administrator."
+        else
+            gpasswd -d "${users[${i}]}" sudo
+            gpasswd -d "${users[${i}]}" adm
+            gpasswd -d "${users[${i}]}" lpadmin
+            gpasswd -d "${users[${i}]}" sambashare
+            gpasswd -d "${users[${i}]}" root
+            printTime "${users[${i}]} has been made a standard user."
+        fi
+
+        echo "Make custom password for ${users[${i}]}? yes or no"
+        read yn3
+        if [ "$yn3" == "yes" ]; then
+            echo "Password:"
+            read -s pw
+            echo -e "$pw\n$pw" | passwd "${users[${i}]}"
+            printTime "${users[${i}]} has been given a custom password."
+        else
+            echo -e "Moodle!22\nMoodle!22" | passwd "${users[${i}]}"
+            printTime "${users[${i}]} has been given the default password 'Moodle!22'."
+        fi
+
+        passwd -x30 -n3 -w7 "${users[${i}]}"
+        usermod -L "${users[${i}]}"
+        printTime "${users[${i}]}'s password policy set: max age 30 days, min age 3 days, warning 7 days. Account locked."
+    fi
+done
+
+# Prompt for adding new users
+clear
+echo "Type user account names of users you want to add, with a space in between:"
+read -a usersNew
+usersNewLength=${#usersNew[@]}
+
+for (( i=0; i<$usersNewLength; i++ )); do
+    clear
+    echo "${usersNew[${i}]}"
+    adduser "${usersNew[${i}]}"
+    printTime "A user account for ${usersNew[${i}]} has been created."
+    
+    echo "Make ${usersNew[${i}]} an administrator? yes or no"
+    read ynNew
+    if [ "$ynNew" == "yes" ]; then
+        gpasswd -a "${usersNew[${i}]}" sudo
+        gpasswd -a "${usersNew[${i}]}" adm
+        gpasswd -a "${usersNew[${i}]}" lpadmin
+        gpasswd -a "${usersNew[${i}]}" sambashare
+        printTime "${usersNew[${i}]} has been made an administrator."
+    else
+        printTime "${usersNew[${i}]} has been made a standard user."
+    fi
+
+    passwd -x30 -n3 -w7 "${usersNew[${i}]}"
+    usermod -L "${usersNew[${i}]}"
+    printTime "${usersNew[${i}]}'s password policy set: max age 30 days, min age 3 days, warning 7 days. Account locked."
+done
+
+# Prompt for service configurations and firewall rules
+declare -A services=(
+    ["Samba"]="sambaYN"
+    ["FTP"]="ftpYN"
+    ["SSH"]="sshYN"
+    ["Telnet"]="telnetYN"
+    ["Mail"]="mailYN"
+    ["Printing"]="printYN"
+    ["MySQL"]="dbYN"
+    ["Web Server"]="httpYN"
+    ["DNS"]="dnsYN"
+)
+
+for service in "${!services[@]}"; do
+    echo "Does this machine need $service? yes or no"
+    read "${services[$service]}"
+done
+
+# Configure and secure services based on user input
+clear
+unalias -a
+printTime "All aliases have been removed."
+
+clear
+usermod -L root
+printTime "Root account has been locked."
+
+clear
+chmod 640 .bash_history
+printTime "Bash history file permissions set."
+
+clear
+chmod 604 /etc/shadow
+printTime "Read/Write permissions on shadow have been set."
+
+clear
+printTime "Check for any user folders that do not belong to any users."
+ls -a /home/ >> ~/Desktop/Script.log
+
+clear
+printTime "Check for any files for users that should not be administrators."
+ls -a /etc/sudoers.d >> ~/Desktop/Script.log
+
+clear
+cp /etc/rc.local ~/Desktop/backups/
+echo -e "#!/bin/bash\nexit 0" > /etc/rc.local
+chmod +x /etc/rc.local
+printTime "Startup scripts in rc.local have been reset."
+
+# Secure shared memory
+if grep -q "none /run/shm" /etc/fstab; then
+    echo "Shared memory already secured."
+else
+    echo -e "\n# Secure shared memory\nnone /run/shm tmpfs rw,noexec,nosuid,nodev 0 0" >> /etc/fstab
+    printTime "Shared memory secured."
 fi
-echo "---------"
 
-# Reset sources.list
-echo "Reset sources.list? (y/n)"
-read sources_response
-if [ "$sources_response" == "y" ]; then
-  codename=$(lsb_release -c -s)
-  backup_file /etc/apt/sources.list
-  echo "deb http://archive.ubuntu.com/ubuntu $codename main multiverse universe restricted" > /etc/apt/sources.list
-  echo "deb http://archive.ubuntu.com/ubuntu $codename-security main multiverse universe restricted" >> /etc/apt/sources.list
-  apt update
-  echo "sources.list reset and updated."
-fi
-echo "---------"
+# Enable firewall and deny common ports
+clear
+ufw enable
+ufw deny 1337
+printTime "Firewall enabled and common ports blocked."
 
-# Enable automatic updates prompt
-echo "Please enable automatic updates. (Press Enter to continue)"
-read
-echo "---------"
-
-# Change passwords for allowed users (non-admins)
-non_admin_users=$(comm -23 <(echo "$allowed_users" | sort) <(echo "$allowed_admins" | sort))
-echo "Change all allowed users' passwords? (y/n)"
-read change_pw_response
-if [ "$change_pw_response" == "y" ]; then
-  for user in $non_admin_users; do
-    echo "$user:Cyberpatriot1!" | chpasswd
-    echo "Password for user $user changed."
-  done
-fi
-echo "---------"
-
-# Install OpenSSH if needed
-if grep -q 'openssh' <<< "$allowed_packages"; then
-  echo "Installing and configuring OpenSSH..."
-  apt install openssh-server -y
-  echo "OpenSSH installed."
-  
-  echo "Reset /etc/ssh/sshd_config? (y/n)"
-  read sshd_config_response
-  if [ "$sshd_config_response" == "y" ]; then
-    backup_file /etc/ssh/sshd_config
-    cp defaults/default_sshd_config /etc/ssh/sshd_config
-    systemctl restart ssh
-    echo "/etc/ssh/sshd_config reset and SSH restarted."
-  fi
-fi
-echo "---------"
-
-# Secure sysctl
-echo "Secure sysctl? (y/n)"
-read sysctl_response
-if [ "$sysctl_response" == "y" ]; then
-  backup_file /etc/sysctl.conf
-  cp defaults/default_sysctl.conf /etc/sysctl.conf
-  sysctl -p
-  echo "Sysctl secured."
-fi
-echo "---------"
-
-# Enable firewall
-echo "Enable firewall? (y/n)"
-read firewall_response
-if [ "$firewall_response" == "y" ]; then
-  ufw enable
-  ufw deny 23 2049 515 111
-  echo "Firewall enabled and specific ports denied."
-fi
-echo "---------"
-
-# Disable guest login
-echo "Disable guest/automatic login? (y/n)"
-read guest_login_response
-if [ "$guest_login_response" == "y" ]; then
-  echo -e "[SeatDefaults]\nallow-guest=false" > /etc/lightdm/lightdm.conf
-  echo "Guest login disabled."
-fi
-echo "---------"
-
-# Change root password
-echo "Change root password? (y/n)"
-read root_pw_response
-if [ "$root_pw_response" == "y" ]; then
-  echo "root:Cyberpatriot1!" | chpasswd
-  echo "Root password changed."
-fi
-echo "---------"
-
-# Disable root login
-echo "Disable root login? (y/n)"
-read disable_root_response
-if [ "$disable_root_response" == "y" ]; then
-  passwd -dl root
-  echo "Root login disabled."
-fi
-echo "---------"
-
-# Password policy
-echo "Enable password policy? (y/n)"
-read pw_policy_response
-if [ "$pw_policy_response" == "y" ]; then
-  apt install libpam-cracklib -y
-  backup_file /etc/pam.d/common-password
-  sed -i '/pam_unix.so/s/$/ minlen=8 remember=5/' /etc/pam.d/common-password
-  echo "password requisite pam_cracklib.so retry=3 minlen=14 difok=3 ucredit=-1 lcredit=-2 dcredit=-1 ocredit=-1" >> /etc/pam.d/common-password
-  echo "Password policy updated in /etc/pam.d/common-password."
-
-  backup_file /etc/login.defs
-  sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS   30/' /etc/login.defs
-  sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS   10/' /etc/login.defs
-  sed -i 's/^PASS_WARN_AGE.*/PASS_WARN_AGE   7/' /etc/login.defs
-  echo "Password policy updated in /etc/login.defs."
-
-  backup_file /etc/pam.d/common-auth
-  echo "auth required pam_tally2.so deny=5 onerr=fail unlock_time=300" >> /etc/pam.d/common-auth
-  echo "common-auth login policy set."
-fi
-echo "---------"
-
-# Media file search and deletion
-echo "View and delete .mp3 files? (y/n)"
-read media_response
-if [ "$media_response" == "y" ]; then
-  media_files=$(find / -type f -iname "*.mp3" 2>/dev/null)
-  echo "$media_files"
-  echo "Total .mp3 files found: $(echo "$media_files" | wc -l)"
-  echo "Delete all .mp3 files? (y/n)"
-  read delete_media_response
-  if [ "$delete_media_response" == "y" ]; then
-    find / -type f -iname "*.mp3" -exec rm -f {} \;
-    echo "All .mp3 files deleted."
-  fi
+# Complete the script with a final message
+printTime "Script execution completed."
+echo "Script execution completed successfully. Logs saved to ~/Desktop/Script.log"
+exit 0
