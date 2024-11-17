@@ -1,8 +1,14 @@
 #!/bin/bash
 
-# Ensure the script is run as root
+# Check if the script is run as root
 if [ "$EUID" -ne 0 ]; then
-  echo "Please run as root"
+  echo "Please run the script as root."
+  exit
+fi
+
+# Ensure the script is run from the correct directory
+if [[ "$PWD" != *"CyberPatriot"* ]]; then
+  echo "Please run the script from the CyberPatriot directory."
   exit
 fi
 
@@ -22,69 +28,66 @@ echo "Check /etc/sudoers (Press Enter to continue)"
 read
 echo "---------"
 
-# Backup and restore functions
+# Function to back up files
 backup_file() {
   local filepath="$1"
   local backup_dir="backup"
   mkdir -p $backup_dir
   cp -n "$filepath" "$backup_dir/"
-  echo "Backup of $filepath created at $backup_dir/"
+  echo "Backup of $filepath created in $backup_dir/"
 }
 
-# Function to print differences
+# Function to print differences between current and allowed configurations
 print_difference() {
   local current="$1"
   local allowed="$2"
-  echo "Current vs allowed difference: $(comm -3 <(echo "$current" | sort) <(echo "$allowed" | sort))"
+  echo "Current vs allowed difference:"
+  comm -3 <(echo "$current" | sort) <(echo "$allowed" | sort)
 }
 
-# Read allowed and default files
+# Get lists from allowed and defaults files
 allowed_users=$(<allowed/allowed_users.txt)
 allowed_admins=$(<allowed/allowed_admins.txt)
 allowed_packages=$(grep -v '^#' allowed/allowed_packages.txt)
-
 default_users=$(<defaults/default_users.txt)
 default_groups=$(<defaults/default_groups.txt)
 default_packages=$(<defaults/default_packages.txt)
 
-# Combine allowed and default sets
 total_users=$(echo "$default_users"$'\n'"$allowed_users" | sort | uniq)
 total_groups=$(echo "$default_groups"$'\n'"$allowed_users" | sort | uniq)
 
-# Check users
+# Check existing users and groups
 current_users=$(getent passwd | cut -d: -f1)
 print_difference "$current_users" "$total_users"
 echo "---------"
 
-# Check groups
 current_groups=$(getent group | cut -d: -f1)
 print_difference "$current_groups" "$total_groups"
 echo "---------"
 
-# Check sudoers group
 current_sudoers=$(getent group sudo | cut -d: -f4 | tr ',' '\n')
 print_difference "$current_sudoers" "$allowed_admins"
 echo "---------"
 
-# Add new admin user
+# Add a new admin user
 echo "Adding user 'parktudor'..."
 useradd -m -s /bin/bash parktudor
 echo "parktudor:GreatYear2019!@" | chpasswd
 usermod -aG sudo parktudor
-echo "User 'parktudor' added to sudo group."
+echo "User 'parktudor' added and password set."
 echo "---------"
 
-# UID 0 check
+# Find UID/GID=0 users
 echo "Find UID/GID=0 users? (y/n)"
 read uid_check
 if [ "$uid_check" == "y" ]; then
   uid0_users=$(awk -F: '($3 == 0 && $1 != "root") {print $1}' /etc/passwd)
   if [ -n "$uid0_users" ]; then
-    echo "WARNING: UID/GID=0 USERS FOUND"
+    echo "WARNING: UID/GID=0 USERS FOUND:"
     echo "$uid0_users"
     read -p "Press Enter to continue"
   else
-    echo "No UID/GID=0 users found"
+    echo "No UID/GID=0 users found."
   fi
 fi
 echo "---------"
@@ -112,14 +115,14 @@ if [ "$sources_response" == "y" ]; then
 fi
 echo "---------"
 
-# Enable automatic updates
+# Enable automatic updates prompt
 echo "Please enable automatic updates. (Press Enter to continue)"
 read
 echo "---------"
 
-# Change all users' passwords (not admins)
+# Change passwords for allowed users (non-admins)
 non_admin_users=$(comm -23 <(echo "$allowed_users" | sort) <(echo "$allowed_admins" | sort))
-echo "Change all allowed users passwords? (y/n)"
+echo "Change all allowed users' passwords? (y/n)"
 read change_pw_response
 if [ "$change_pw_response" == "y" ]; then
   for user in $non_admin_users; do
@@ -129,8 +132,8 @@ if [ "$change_pw_response" == "y" ]; then
 fi
 echo "---------"
 
-# Install OpenSSH if allowed
-if grep -q 'openssh-server' <<< "$allowed_packages"; then
+# Install OpenSSH if needed
+if grep -q 'openssh' <<< "$allowed_packages"; then
   echo "Installing and configuring OpenSSH..."
   apt install openssh-server -y
   echo "OpenSSH installed."
@@ -163,7 +166,7 @@ read firewall_response
 if [ "$firewall_response" == "y" ]; then
   ufw enable
   ufw deny 23 2049 515 111
-  echo "Firewall enabled with specific ports denied."
+  echo "Firewall enabled and specific ports denied."
 fi
 echo "---------"
 
@@ -194,7 +197,7 @@ if [ "$disable_root_response" == "y" ]; then
 fi
 echo "---------"
 
-# Password policy enforcement
+# Password policy
 echo "Enable password policy? (y/n)"
 read pw_policy_response
 if [ "$pw_policy_response" == "y" ]; then
@@ -209,10 +212,14 @@ if [ "$pw_policy_response" == "y" ]; then
   sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS   10/' /etc/login.defs
   sed -i 's/^PASS_WARN_AGE.*/PASS_WARN_AGE   7/' /etc/login.defs
   echo "Password policy updated in /etc/login.defs."
+
+  backup_file /etc/pam.d/common-auth
+  echo "auth required pam_tally2.so deny=5 onerr=fail unlock_time=300" >> /etc/pam.d/common-auth
+  echo "common-auth login policy set."
 fi
 echo "---------"
 
-# Media file management
+# Media file search and deletion
 echo "View and delete .mp3 files? (y/n)"
 read media_response
 if [ "$media_response" == "y" ]; then
@@ -225,16 +232,3 @@ if [ "$media_response" == "y" ]; then
     find / -type f -iname "*.mp3" -exec rm -f {} \;
     echo "All .mp3 files deleted."
   fi
-fi
-echo "---------"
-
-# Change crucial file permissions
-declare -A file_perms=(["/etc/passwd"]="644 root:root" ["/etc/shadow"]="640 root:shadow")
-echo "Change crucial file permissions and ownership? (y/n)"
-read perms_response
-if [ "$perms_response" == "y" ]; then
-  for file in "${!file_perms[@]}"; do
-    perm=${file_perms[$file]}
-    chmod "${perm%% *}" "$file"
-    chown "${perm#* }" "$file"
-   
